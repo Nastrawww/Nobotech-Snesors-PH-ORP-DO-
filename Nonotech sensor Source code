@@ -1,0 +1,380 @@
+import time
+import SDL_DS3231
+from threading import *
+import RPi.GPIO as GPIO
+from time import sleep
+import math
+import serial
+import binascii
+import sys
+from struct import unpack
+import ast
+from Adafruit_IO import Client
+import Adafruit_ADS1x15
+from datetime import datetime
+from Adafruit_IO import Client
+import random
+import os
+import client as c
+import json
+import threading
+
+from gpiozero import CPUTemperature
+import socket
+import subprocess
+
+# This code is all about pH,ORP,DO. 
+# IMPORTANT--> 1.Connect sensors in this order 1 by 1 -> PH, ORP, DO.  2.ORP sensor does not have tempereture sensor.
+
+GPIO.setwarnings(False) # Ignore warning for now
+GPIO.setmode(GPIO.BCM) # Use physical pin numbering
+
+pulpin = 17
+dirpin = 27
+relay1 = 5
+relay2 = 6
+
+GPIO.setup(pulpin, GPIO.OUT, initial=GPIO.LOW) 
+GPIO.setup(dirpin, GPIO.OUT, initial=GPIO.HIGH)
+GPIO.setup(relay1, GPIO.OUT, initial=GPIO.HIGH)
+GPIO.setup(relay2, GPIO.OUT, initial=GPIO.HIGH)
+
+#mqqt = c.iotMQQT()
+I=0
+REMOTE_SERVER = "139.59.38.162"
+error=0
+h=0
+
+temp=0
+
+z=61
+y=0
+
+global vin1
+global current2
+
+vin1 = 0
+current2 = 0
+
+#ADC Module variable
+adc = Adafruit_ADS1x15.ADS1115()
+GAIN = 1
+
+#Current sensor variable
+offsetVoltage = 2.5
+sensitivity =0.185
+
+ds3231 = SDL_DS3231.SDL_DS3231(2, 0x68)
+ds3231.write_now()
+H = ds3231.hour()
+M = ds3231.minute()
+S = ds3231.second()
+
+#Checking Internet connection
+def is_connected(hostname):
+  try:
+    # see if we can resolve the host name -- tells us if there is
+    # a DNS listening
+    host = socket.gethostbyname(hostname)
+    # connect to the host -- tells us if the host is actually
+    # reachable
+    s = socket.create_connection((host, 80), 2)
+    s.close()
+    #print(host)
+    return True
+  except:
+     pass
+  return False
+
+
+#Calculating Voltage
+def adcvolt(v):
+	ch=v
+	values = [0]*2
+		
+	if(ch=='ch1'):
+	 values[0] = adc.read_adc(0, gain=GAIN)
+	 volt1 = (values[0] * 4.096) / 32767
+	 vin1 = volt1 / 0.2
+	 return vin1
+	 
+	if(ch=='ch2'):
+	 values[1] = adc.read_adc(1, gain=GAIN)
+	 volt2 = (values[1] * 4.096) / 32767
+	 current2 = ((volt2 - offsetVoltage) / sensitivity);
+	 return current2
+
+#Calculating All sensor values
+def calc(c,b,a) :
+            data1 = c
+            data2 = b
+            sum1 = data1 + data2
+            an_integer1 = int(data1, 16)
+            an_integer2 = int(data2, 16)
+            an_integer3 = int(sum1, 16)
+            hex_value1 = hex(an_integer1)
+            hex_value2 = hex(an_integer2)
+            hex_value3 = hex(an_integer3)
+            
+            if a == "sensor" or a == "temp":
+             res = int(hex_value3, 16)
+             numstr = str(res)
+            if a == "orp":
+             res = int(hex_value2, 16)
+             fdata = str(res)
+            
+            if a == "sensor":
+             act1 = numstr[0]
+             act2 = numstr[1]+numstr[2]+numstr[3]
+             e1 = float(act1)
+             e2 = float(act2)
+             e22 = float(e2/1000)
+             fdata = e1 + e22
+            if a == "temp": 
+             act1 = numstr[0]+numstr[1]
+             act2 = numstr[2]+numstr[3]
+             e1 = float(act1)
+             e2 = float(act2)
+             e22 = float(e2/100)
+             fdata = e1 + e22
+             
+            return fdata
+
+#calculating all sensor values 
+def read_data(x):
+            if x == "do" or x == "temp_do":
+             serialport2= "/dev/ttyUSB2"
+            if x == "orp":
+             serialport2= "/dev/ttyUSB1"
+            if x == "ph" or x == "temp_ph":
+             serialport2= "/dev/ttyUSB0"
+            
+            port2 =serial.Serial(serialport2,baudrate=9600,parity=serial.PARITY_NONE,stopbits=serial.STOPBITS_ONE,bytesize=serial.EIGHTBITS,timeout=None)
+            data=[0x01,0x03,0x00,0x00,0x00,0x02,0xC4,0x0B]
+            port2.write(serial.to_bytes(data))
+            time.sleep(.1)
+            if port2.inWaiting()>0:
+             data5=[]
+             while port2.inWaiting()>0:
+              data5.append(binascii.hexlify((port2.read())))
+             
+             if x == "ph" or x == "do": 
+              fdata = calc(data5[3],data5[4],"sensor")
+             if x == "orp":
+              fdata = calc(data5[3],data5[4],"orp")
+             if x == "temp_ph" or x == "temp_do": 
+              fdata = calc(data5[5],data5[6],"temp")
+              
+             if x == "ph":
+              print("PH Value of the water is " + str(fdata))
+             if x == "do":
+              print("DO Value of the water is " + str(fdata))
+             if x == "temp_ph":
+              print("PH Sensor temperature value is " + str(fdata))
+             if x == "temp_do":
+              print("DO Sensor temperature value is " + str(fdata))
+             if x == "orp":
+              print("ORP Value of the water is  " + str(fdata))
+             return fdata	
+             	
+            else:
+             if x == "ph":
+              print("No Response from PH sensor")
+             if x == "do":
+              print("No Response from DO sensor")
+             if x == "orp":
+              print("No Response from ORP sensor")
+             if x == "temp_ph":
+              print("No Temperature from PH sensor")
+             if x == "temp_do":
+              print("No Temperature from DO sensor")
+             sleep(1) 
+
+def sensors():
+#Sensor reading taking loop 
+  print("Sensor Relay ON")
+  GPIO.output(relay1, GPIO.LOW) #Relay ON
+  sleep(8)
+  
+  q=0
+  global phavg
+  global orpavg
+  global doavg
+  global current2 
+  phavg = 0.0
+  orpavg = 0.0
+  doavg = 0.0
+  phc=0 #PH count
+  orpc=0#ORP count
+  doc=0#DO count
+  
+  print("Sensor started taking reading...")
+  while q<3:
+   s = read_data("ph")
+   k = read_data("temp_ph")
+   k2 = read_data("temp_do")
+   p = read_data("orp")
+   g = read_data("do")
+   
+   
+   if(s!=None):
+    phavg = float(s) + phavg
+    phc +=1
+    if(s>14):
+     s = 14
+   if(p!=None):
+    orpavg = float(p) + orpavg
+    orpc+=1
+    if(int(p)>500):
+     p = 330
+   if(g!=None):
+    doavg = float(g) + doavg
+    doc +=1
+    if(g>10):
+     g = 9
+   current2 = adcvolt('ch2')
+   print('Sensor Voltage = ', current2)
+   H = ds3231.hour()
+   M = ds3231.minute()
+   S = ds3231.second()
+   rtime=str(H)+':'+str(M)+':'+str(S)
+   file = open("sensor_datas.csv", "a")
+   if os.stat("sensor_datas.csv").st_size == 0:
+       file.write("Time,PH Data,PH Temperature,ORP Data,DO Data,DO Temperature\n")
+   file.write(str(rtime)+","+str(s)+","+str(k)+","+str(p)+","+str(g)+","+str(k2)+","+"\n")
+   file.flush()
+   q+=1
+   if (q<3):
+    sleep(20)
+   else:
+    if(phc!=0):
+     phavg = phavg/phc
+    if(orpc!=0):
+     orpavg = orpavg/orpc
+    if(doc!=0):
+     doavg = doavg/doc
+  print("Sensor Reading Taken.")
+  print("data stored")   
+  print(str(phavg) + " Average PH Value")
+  print(str(orpavg) + " Average ORP Value")
+  print(str(doavg) + " Average DO Value")
+  sleep(2)
+  print("Sensor Relay OFF")
+  GPIO.output(relay1, GPIO.HIGH) #Relay OFF
+
+
+
+#Motor Running Function
+def motor(pul,dire):
+  global vin1
+  print("Motor Relay ON")
+  GPIO.output(relay2, GPIO.LOW) #Relay ON
+  sleep(2)
+  j=0
+  if(dire==0):
+   print("Motor Running Backward...")
+   GPIO.output(dirpin, GPIO.LOW)
+  if(dire==1):
+   print("Motor Running Forward...")
+   GPIO.output(dirpin, GPIO.HIGH)
+   
+  while True:
+   GPIO.output(pulpin, GPIO.HIGH)
+   sleep(0.0001)
+   GPIO.output(pulpin, GPIO.LOW)
+   sleep(0.0001)
+
+   j+=1
+      
+   if(j==pul):
+    GPIO.output(dirpin, GPIO.LOW)
+    GPIO.output(pulpin, GPIO.LOW)
+    print("Motor Stoped")
+    j=0
+    vin1 = adcvolt('ch1')
+    print('Motor Voltage = ', vin1)
+    sleep(2)
+    print("Motor Relay OFF")
+    GPIO.output(relay2, GPIO.HIGH) #Relay OFF
+    break
+    
+def heartBeat():
+    threading.Timer(60.0,heartBeat).start()
+    mqqt.postHeartBeat()
+
+def doFeedRpiTemp():
+    global temp
+    threading.Timer(60.0,doFeedRpiTemp).start()
+    now = datetime.now()
+    date_tm = now.strftime("%Y-%m-%d %H:%M:%S")
+    mqqt.postDataFeed({"dataPoint":date_tm, "paramType": "tm", "paramValue": temp})
+
+
+def doFeed():
+    now = datetime.now()
+    date_tm = now.strftime("%Y-%m-%d %H:%M:%S")
+    mqqt.postDataFeed({"dataPoint":date_tm, "paramType": "ph", "paramValue": phavg})
+    mqqt.postDataFeed({"dataPoint":date_tm, "paramType": "or", "paramValue": orpavg})
+    mqqt.postDataFeed({"dataPoint":date_tm, "paramType": "do", "paramValue": doavg})
+    mqqt.postDataFeed({"dataPoint":date_tm, "paramType": "v1", "paramValue": vin1})
+    mqqt.postDataFeed({"dataPoint":date_tm, "paramType": "v2", "paramValue": current2})
+
+while True:
+ while True:
+  try:
+     Net = is_connected(REMOTE_SERVER)
+     if(not Net):
+      I=0
+      print("Net OFF")
+     if(Net and I == 0):
+      print("Net ON")
+      mqqt = c.iotMQQT()
+      I=1
+     if(error==1):
+      ds3231.write_now()
+      error=0
+     print("Raspberry Pi=\t" + time.strftime("%Y-%m-%d %H:%M:%S"))
+     print("DS3231=\t\t%s" % ds3231.read_datetime())
+     cpu = CPUTemperature()
+     temp= cpu.temperature
+     t=str(temp)
+     print("Temperature = %02s Degree" % t)
+
+     rotation =1 #how many rotations you need
+     steps =1600 #no of steps per rotation. check stepper motor's no of steps and update here 
+     #pul = rotation * steps
+     pul = 10000
+ 
+     H = ds3231.hour()
+     M = ds3231.minute()
+     S = ds3231.second()
+     print('Time = %02d:%02d:%02d' % (H,M,S))
+ 
+     if(h==0 and Net):
+      heartBeat() #IOT block of code __updating status of device__
+      doFeedRpiTemp() #IOT Temperature status update
+      h+=1
+  
+  
+     if((M%2 == 0) and S == 00):
+    #Motor Forward
+      #motor(pul,1)
+  
+      sensors()
+
+
+      doFeed() #IOT block of code __uploading function to dashboard__
+
+    #Motor Reverse Running  
+      #motor(pul,0)
+  
+
+     sleep(0.90)
+  except Exception as e:
+    sleep(1)
+    error = 1
+    print("")
+    print(e)
+    print("")
+ 
+ 
