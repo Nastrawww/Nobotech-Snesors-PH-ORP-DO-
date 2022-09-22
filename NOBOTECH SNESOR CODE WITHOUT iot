@@ -1,0 +1,170 @@
+import time
+import RPi.GPIO as GPIO
+from time import sleep
+import math
+import serial
+import binascii
+import os
+import sys
+from datetime import datetime
+import random
+from gpiozero import CPUTemperature
+GPIO.setwarnings(False) # Ignore warning for now
+GPIO.setmode(GPIO.BCM) # Use physical pin numbering
+#Calculating All sensor values
+def calc(c,b,a) :
+            data1 = c
+            data2 = b
+            sum1 = data1 + data2
+            an_integer1 = int(data1, 16)
+            an_integer2 = int(data2, 16)
+            an_integer3 = int(sum1, 16)
+            hex_value1 = hex(an_integer1)
+            hex_value2 = hex(an_integer2)
+            hex_value3 = hex(an_integer3)
+            
+            if a == "sensor" or a == "temp":
+             res = int(hex_value3, 16)
+             numstr = str(res)
+            if a == "orp":
+             res = int(hex_value2, 16)
+             fdata = str(res)
+            
+            if a == "sensor":
+             act1 = numstr[0]
+             act2 = numstr[1]+numstr[2]+numstr[3]
+             e1 = float(act1)
+             e2 = float(act2)
+             e22 = float(e2/1000)
+             fdata = e1 + e22
+            if a == "temp": 
+             act1 = numstr[0]+numstr[1]
+             act2 = numstr[2]+numstr[3]
+             e1 = float(act1)
+             e2 = float(act2)
+             e22 = float(e2/100)
+             fdata = e1 + e22
+             
+            return fdata
+
+#calculating all sensor values 
+def read_data(x):
+            if x == "do" or x == "temp_do":
+             serialport2= "/dev/ttyUSB0"
+            if x == "orp":
+             serialport2= "/dev/ttyUSB2"
+            if x == "ph" or x == "temp_ph":
+             serialport2= "/dev/ttyUSB1"
+            
+            port2 =serial.Serial(serialport2,baudrate=9600,parity=serial.PARITY_NONE,stopbits=serial.STOPBITS_ONE,bytesize=serial.EIGHTBITS,timeout=None)
+            data=[0x01,0x03,0x00,0x00,0x00,0x02,0xC4,0x0B]
+            port2.write(serial.to_bytes(data))
+            time.sleep(.1)
+            if port2.inWaiting()>0:
+             data5=[]
+             while port2.inWaiting()>0:
+              data5.append(binascii.hexlify((port2.read())))
+             
+             if x == "ph" or x == "do": 
+              fdata = calc(data5[3],data5[4],"sensor")
+             if x == "orp":
+              fdata = calc(data5[3],data5[4],"orp")
+             if x == "temp_ph" or x == "temp_do": 
+              fdata = calc(data5[5],data5[6],"temp")
+              
+             if x == "ph":
+              print("PH Value of the water is " + str(fdata))
+             if x == "do":
+              print("DO Value of the water is " + str(fdata))
+             if x == "temp_ph":
+              print("PH Sensor temperature value is " + str(fdata))
+             if x == "temp_do":
+              print("DO Sensor temperature value is " + str(fdata))
+             if x == "orp":
+              print("ORP Value of the water is  " + str(fdata))
+             return fdata	
+             	
+            else:
+             if x == "ph":
+              print("No Response from PH sensor")
+             if x == "do":
+              print("No Response from DO sensor")
+             if x == "orp":
+              print("No Response from ORP sensor")
+             if x == "temp_ph":
+              print("No Temperature from PH sensor")
+             if x == "temp_do":
+              print("No Temperature from DO sensor")
+             sleep(1) 
+
+def sensors():
+#Sensor reading taking loop   
+  q=0
+  global phavg
+  global orpavg
+  global doavg
+  global current2 
+  phavg = 0.0
+  orpavg = 0.0
+  doavg = 0.0
+  phc=0 #PH count
+  orpc=0#ORP count
+  doc=0#DO count
+  
+  print("Sensor started taking reading...")
+  while q<3:
+   s = read_data("ph")
+   k = read_data("temp_ph")
+   k2 = read_data("temp_do")
+   p = read_data("orp")
+   g = read_data("do")
+   
+   
+   if(s!=None):
+    phavg = float(s) + phavg
+    phc +=1
+    if(s>14):
+     s = 14
+   if(p!=None):
+    orpavg = float(p) + orpavg
+    orpc+=1
+    if(int(p)>500):
+     p = 330
+   if(g!=None):
+    doavg = float(g) + doavg
+    doc +=1
+    if(g>10):
+     g = 9
+   file = open("sensor_datas.csv", "a")
+   if os.stat("sensor_datas.csv").st_size == 0:
+       file.write("PH Data,PH Temperature,ORP Data,DO Data,DO Temperature\n")
+   file.write(str(s)+","+str(k)+","+str(p)+","+str(g)+","+str(k2)+","+"\n")
+   file.flush()
+   q+=1
+   if (q<3):
+    sleep(20)
+   else:
+    if(phc!=0):
+     phavg = phavg/phc
+    if(orpc!=0):
+     orpavg = orpavg/orpc
+    if(doc!=0):
+     doavg = doavg/doc
+  print("Sensor Reading Taken.")  
+  print(str(phavg) + " Average PH Value")
+  print(str(orpavg) + " Average ORP Value")
+  print(str(doavg) + " Average DO Value")
+  sleep(2)
+while True:
+ while True:
+  try:
+      sensors()
+      sleep(0.90)
+  except Exception as e:
+    sleep(1)
+    error = 1
+    print("")
+    print(e)
+    print("")
+ 
+ 
